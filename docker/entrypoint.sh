@@ -170,7 +170,7 @@ fi
 # before `docker compose up`; that breaks SDK writes from inside the container.
 # Reclaim ownership so the wuji user inside can read/write calibration files.
 if [ ! -w "$HOME/.wuji" ]; then
-    sudo mkdir -p "$HOME/.wuji/sdk/params"
+    sudo mkdir -p "$HOME/.wuji/sdk/params" "$HOME/.wuji/sdk/users"
     sudo chown -R wuji:wuji "$HOME/.wuji"
 fi
 

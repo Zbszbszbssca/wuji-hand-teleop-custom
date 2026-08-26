@@ -25,7 +25,9 @@
 #
 # ===========================================
 
-ARG ROS_BASE_IMAGE=osrf/ros:humble-desktop
+# Pin the exact ROS Humble / Ubuntu 22.04 base used by the validated machine.
+# Override ROS_BASE_IMAGE only when intentionally revalidating another mirror/tag.
+ARG ROS_BASE_IMAGE=osrf/ros:humble-desktop@sha256:3d87cf339919a85cff7743ec9ba5e7ec81ccc26c9f722f1c7a6af5008dfdc128
 FROM ${ROS_BASE_IMAGE}
 
 LABEL description="Wuji Hand Teleop: Wuji Glove + Wuji Hand (default), optional HTC / PICO arm input, cameras"
@@ -166,8 +168,10 @@ RUN if [ -n "${PIP_INDEX_URL}" ]; then \
 # -------------------------------------------
 # Required by the wuji_glove input path: wujihand_node imports wuji_sdk
 # lazily when wujihand_ik.yaml::input_source is "wuji_glove" (the default).
-# Public PyPI release tracks Wuji Studio (current: 2026.5.26 <-> Studio 5.18).
-ARG WUJI_SDK_VERSION=2026.5.26
+# Reproduce the SDK version running on the validated source machine. Studio
+# 2026.7.14+ uses per-user calibration storage; this deployment uses Studio
+# 2026.7.16 with wuji-sdk 2026.7.21.
+ARG WUJI_SDK_VERSION=2026.7.21
 RUN pip3 install --no-cache-dir --timeout ${PIP_TIMEOUT} wuji-sdk==${WUJI_SDK_VERSION}
 
 # -------------------------------------------
@@ -196,7 +200,7 @@ RUN pip3 install --no-cache-dir --timeout ${PIP_TIMEOUT} wuji-sdk==${WUJI_SDK_VE
 #   - external/wuji-hand-description/urdf              (v1.0.1)
 COPY src/wuji-retargeting /tmp/wuji-retargeting
 COPY src/wujihandros2/external /tmp/wujihandros2-external
-RUN printf 'from setuptools import setup, find_packages\nsetup(\n    name="wuji-retargeting",\n    version="2026.05.26",\n    packages=find_packages(include=["wuji_retargeting*"]),\n    install_requires=["numpy==2.2.6", "nlopt==2.10.0", "pyyaml", "scipy>=1.11.0"],\n)\n' > /tmp/wuji-retargeting/setup.py \
+RUN printf 'from setuptools import setup, find_packages\nsetup(\n    name="wuji-retargeting",\n    version="2026.6.27",\n    packages=find_packages(include=["wuji_retargeting*"]),\n    install_requires=["numpy==2.2.6", "nlopt==2.10.0", "pyyaml", "scipy>=1.11.0"],\n)\n' > /tmp/wuji-retargeting/setup.py \
     && pip3 install --no-cache-dir /tmp/wuji-retargeting \
     && WUJI_RT_DIR=$(python3 -c "import wuji_retargeting, os; print(os.path.dirname(wuji_retargeting.__file__))") \
     && if [ -d /tmp/wujihandros2-external/wuji-description/hand/body/urdf ]; then \

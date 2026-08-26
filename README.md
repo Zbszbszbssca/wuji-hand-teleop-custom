@@ -90,7 +90,7 @@ Ubuntu 22.04 LTS, x86_64. The Docker image ships ROS 2, Python deps, vendor SDKs
   git lfs install
   ```
 - **Docker CE + Compose plugin** — see Step 1 below. Ubuntu's stock `docker.io` does not ship `docker compose`.
-- **Wuji Studio 5.18** — required for Wuji Glove (the default hand input). Studio writes calibration to `~/.wuji/sdk/params/<SN>.toml`; `docker-compose.yml` bind-mounts `~/.wuji/` into the container. Download: <https://docs.wuji.tech/docs/en/wuji-studio/latest/>.
+- **Wuji Studio 2026.7.16** — required for Wuji Glove (the default hand input) and paired with the source machine's working `wuji-sdk==2026.7.21` runtime. Create a **named user profile** before calibrating: the `Default` profile does not save calibration. Studio stores named-profile calibration under `~/.wuji/sdk/users/<profile-id>/`; `docker-compose.yml` bind-mounts the whole `~/.wuji/` tree into the container. Download the matching Studio release from <https://github.com/wuji-technology/wuji-studio/releases/tag/v2026.7.16>.
 
 Arm teleop is layered on top later (see [Adding arm teleop](#adding-arm-teleop)) — its host-side runtime (SteamVR for HTC Tracker, ADB for PICO) is covered in those per-device guides.
 
@@ -128,7 +128,7 @@ docker compose version
 
 ```bash
 mkdir -p ~/ros2_ws/src && cd ~/ros2_ws/src
-git clone --recurse-submodules https://github.com/wuji-technology/wuji-hand-teleop.git
+git clone --recurse-submodules git@github.com:Zbszbszbssca/wuji-hand-teleop-custom.git wuji-hand-teleop
 cd wuji-hand-teleop
 
 # Pull large files (prebuilt PC-Service .deb, vendored SDK binaries, ~280 MB total)
@@ -140,7 +140,7 @@ git submodule update --init --recursive --progress
 
 > **Important**: `--recurse-submodules` is required. The repo contains two Wuji-owned submodules — [`wujihandros2`](https://github.com/wuji-technology/wujihandros2) (ROS2 driver; pulls in hand description assets) and [`wuji-retargeting`](https://github.com/wuji-technology/wuji-retargeting) (hand-pose retargeting algo, pip-installed into the image) — plus the vendored PICO sources under `src/input_devices/pico_input/vendor/`. If you already cloned without it: `git submodule update --init --recursive --progress`.
 >
-> **Validated dependency pins**: this Docker setup has been validated with the custom `src/wujihandros2` driver based on `v1.0.1` plus the measured-pose startup safety fix, `src/wuji-retargeting` at `v2026.6.27`, and `WUJIHANDCPP_VERSION=1.5.1` in [`docker/Dockerfile`](docker/Dockerfile). Note that `wuji-retargeting v2026.6.27` is newer than `wuji-hand-teleop v2026.6.13`; it is recorded here as the tested build combination for this Dockerfile, not as an upstream submodule pin from that teleop tag. Avoid `git submodule update --remote` unless you also revalidate the Docker and ROS builds.
+> **Validated dependency pins**: this Docker setup matches the working source machine: Ubuntu `22.04.5` / ROS 2 Humble base image digest `sha256:3d87cf…dc128`, Wuji Studio `2026.7.16`, `wuji-sdk==2026.7.21`, the custom `src/wujihandros2` driver based on `v1.0.1` plus the measured-pose startup safety fix, `src/wuji-retargeting` source and installed package metadata both at `2026.6.27`, XRoboToolkit PC-Service `1.0.0`, and `WUJIHANDCPP_VERSION=1.5.1` in [`docker/Dockerfile`](docker/Dockerfile). The working host currently uses Docker Engine `29.7.2` and Compose `v5.5.0`; these host tools may be newer without changing the pinned container runtime. Note that `wuji-retargeting v2026.6.27` is newer than `wuji-hand-teleop v2026.6.13`; it is recorded here as the tested build combination for this Dockerfile, not as an upstream submodule pin from that teleop tag. Avoid `git submodule update --remote` unless you also revalidate the Docker and ROS builds.
 
 ### 3. Build the image
 
@@ -175,7 +175,7 @@ The image only contains the runtime environment (ROS 2 + drivers + Python deps +
 To verify the dependency versions after cloning:
 
 ```bash
-git -C src/wujihandros2 describe --tags --exact-match
+git -C src/wujihandros2 describe --tags --always
 git -C src/wuji-retargeting describe --tags --always
 ```
 
@@ -188,13 +188,25 @@ v2026.6.27
 
 ### 4. Calibrate Wuji Gloves
 
-Download [Wuji Studio 5.18](https://docs.wuji.tech/docs/en/wuji-studio/latest/) and run the glove calibration. Studio writes calibration to `~/.wuji/sdk/params/<SN>.toml` on the host; `docker-compose.yml` mounts that directory into the container automatically.
+Install [Wuji Studio 2026.7.16](https://github.com/wuji-technology/wuji-studio/releases/tag/v2026.7.16), matching the validated source machine. In Studio, create and select a **named user profile** (do not use `Default`), then calibrate the left and right gloves. The generated models are stored under `~/.wuji/sdk/users/<profile-id>/models/` on that host; `docker-compose.yml` mounts the complete `~/.wuji/` tree into the container automatically. Calibration data may be regenerated on each deployment machine and is intentionally not committed to GitHub.
 
 > **Close Wuji Studio before launching teleop.** Studio holds the glove SDK
 > connection while it's open, and the gloves accept only one client at a time —
 > leaving Studio running makes the teleop glove controller fail to connect
 > (`wuji_sdk connect … Connection timeout`, hands never track). Quit Studio once
 > calibration is done, then start teleop.
+
+After the container starts, confirm that the SDK sees the named profile rather
+than `Default`:
+
+```bash
+docker exec wuji-hand-teleop python3 -c \
+  "from wuji_sdk import SdkManager; print(SdkManager.instance().current_user())"
+```
+
+The output must show `is_default: False`. If it shows `True`, reopen Studio,
+select the calibrated named profile, close Studio completely, and restart the
+container.
 
 ### 5. Configure serial numbers
 
@@ -337,7 +349,7 @@ input_source: "wuji_glove"   # default and only advertised path.
 
 **Wuji Glove setup:**
 
-1. **Calibrate with Wuji Studio 5.18** — download from [docs.wuji.tech/docs/en/wuji-studio/latest/](https://docs.wuji.tech/docs/en/wuji-studio/latest/). Studio writes calibration to `~/.wuji/sdk/params/<SN>.toml`; `docker-compose.yml` bind-mounts `~/.wuji/` into the container.
+1. **Calibrate with Wuji Studio 2026.7.16** — create and select a named profile first, then calibrate both hands. The `Default` profile does not retain calibration. Named-profile models are stored under `~/.wuji/sdk/users/<profile-id>/models/` and are visible in the container through the existing `~/.wuji/` bind mount. Close Studio completely before starting teleoperation.
 2. **Find your glove serial numbers:**
    ```bash
    python3 -c "from wuji_sdk import SdkManager

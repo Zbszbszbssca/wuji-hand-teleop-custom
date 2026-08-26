@@ -86,8 +86,9 @@ services:
       - /dev:/dev:rw                       # device hot-plug
       - ../src:/home/wuji/ros2_ws/src:rw   # bind-mount the host source tree
       # --- Wuji Studio calibration ---
-      # Studio writes <SN>.toml to host ~/.wuji/sdk/params/; SDK reads it in
-      # the container. entrypoint.sh chowns this if docker auto-created it as root.
+      # Studio 2026.7.14+ stores named-profile calibration under
+      # ~/.wuji/sdk/users/<profile-id>/; the SDK reads the same active profile in
+      # the container. entrypoint.sh repairs ownership if Docker created it as root.
       - ${HOME}/.wuji:/home/wuji/.wuji:rw
       # --- SteamVR / OpenVR (HTC Vive Tracker path only) ---
       # PICO-only users may comment this out or leave it (the empty dir is harmless).
