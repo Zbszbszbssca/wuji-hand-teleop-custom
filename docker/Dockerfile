@@ -25,7 +25,8 @@
 #
 # ===========================================
 
-FROM osrf/ros:humble-desktop
+ARG ROS_BASE_IMAGE=osrf/ros:humble-desktop
+FROM ${ROS_BASE_IMAGE}
 
 LABEL description="Wuji Hand Teleop: Wuji Glove + Wuji Hand (default), optional HTC / PICO arm input, cameras"
 
@@ -102,6 +103,11 @@ RUN if head -c 100 /tmp/xrobotoolkit-pc-service.deb | grep -q 'git-lfs.github.co
 # ROS2 driver: https://github.com/wuji-technology/wujihandros2 (submodule at src/wujihandros2/)
 # C++ SDK deb: https://github.com/wuji-technology/wujihandpy/releases
 # After install: /usr/lib/libwujihandcpp.so + /usr/include/wujihandcpp/
+# Validated default: wujihandcpp 1.5.1 + custom wujihandros2 based on v1.0.1
+# with the measured-pose startup safety fix.
+# Newer wujihandros2 tags (main / v1.1.0) use newer SDK APIs such as
+# wujihandcpp/transport/usb_enumerate.hpp and wujihandcpp::device::Hand::Side;
+# do not bump either side independently without rebuilding and testing colcon.
 ARG WUJIHANDCPP_VERSION=1.5.1
 RUN wget -q https://github.com/wuji-technology/wujihandpy/releases/download/v${WUJIHANDCPP_VERSION}/wujihandcpp-${WUJIHANDCPP_VERSION}-amd64.deb \
         -O /tmp/wujihandcpp.deb \
@@ -183,17 +189,28 @@ RUN pip3 install --no-cache-dir --timeout ${PIP_TIMEOUT} wuji-sdk==${WUJI_SDK_VE
 # URDF sideload: wuji-retargeting expects URDFs at
 # `wuji_retargeting/wuji-description/hand/body/urdf/{left,right}.urdf`, normally
 # populated by its `wuji-description` sub-submodule. `git submodule update
-# --init --recursive` from the outer repo doesn't traverse that nested submodule
-# reliably, so we copy the same URDFs from `wujihandros2/external/wuji-description`
-# (same upstream, same tag-tracked content) into the installed package after pip.
+# --init --recursive` from the outer repo doesn't always leave that nested content
+# where pip can find it, so we copy equivalent URDFs from wujihandros2 after pip.
+# wujihandros2 changed the description path across tags; support both layouts:
+#   - external/wuji-description/hand/body/urdf          (newer tags)
+#   - external/wuji-hand-description/urdf              (v1.0.1)
 COPY src/wuji-retargeting /tmp/wuji-retargeting
-COPY src/wujihandros2/external/wuji-description/hand/body/urdf /tmp/wuji-description-urdf
+COPY src/wujihandros2/external /tmp/wujihandros2-external
 RUN printf 'from setuptools import setup, find_packages\nsetup(\n    name="wuji-retargeting",\n    version="2026.05.26",\n    packages=find_packages(include=["wuji_retargeting*"]),\n    install_requires=["numpy==2.2.6", "nlopt==2.10.0", "pyyaml", "scipy>=1.11.0"],\n)\n' > /tmp/wuji-retargeting/setup.py \
     && pip3 install --no-cache-dir /tmp/wuji-retargeting \
     && WUJI_RT_DIR=$(python3 -c "import wuji_retargeting, os; print(os.path.dirname(wuji_retargeting.__file__))") \
+    && if [ -d /tmp/wujihandros2-external/wuji-description/hand/body/urdf ]; then \
+           WUJI_URDF_DIR=/tmp/wujihandros2-external/wuji-description/hand/body/urdf; \
+       elif [ -d /tmp/wujihandros2-external/wuji-hand-description/urdf ]; then \
+           WUJI_URDF_DIR=/tmp/wujihandros2-external/wuji-hand-description/urdf; \
+       else \
+           echo "ERROR: Wuji URDF directory not found under src/wujihandros2/external." >&2; \
+           echo "       Run: git submodule update --init --recursive --progress" >&2; \
+           exit 1; \
+       fi \
     && mkdir -p "$WUJI_RT_DIR/wuji-description/hand/body/urdf" \
-    && cp /tmp/wuji-description-urdf/*.urdf "$WUJI_RT_DIR/wuji-description/hand/body/urdf/" \
-    && rm -rf /tmp/wuji-retargeting /tmp/wuji-description-urdf
+    && cp "$WUJI_URDF_DIR"/*.urdf "$WUJI_RT_DIR/wuji-description/hand/body/urdf/" \
+    && rm -rf /tmp/wuji-retargeting /tmp/wujihandros2-external
 
 # -------------------------------------------
 # 7. ROS2 Workspace (directory only; source mounted from host)

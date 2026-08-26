@@ -19,6 +19,11 @@
 # Accelerate the build behind a slow PyPI mirror:
 #   docker compose build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 #
+# If Docker Hub is slow/unreachable, override the ROS base image too:
+#   docker compose build \
+#     --build-arg ROS_BASE_IMAGE=docker.1ms.run/osrf/ros:humble-desktop \
+#     --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+#
 # ===========================================
 
 services:
@@ -26,6 +31,10 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      # Optional build args for restricted networks:
+      # args:
+      #   ROS_BASE_IMAGE: docker.1ms.run/osrf/ros:humble-desktop
+      #   PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
     image: wuji-hand-teleop:latest
     container_name: wuji-hand-teleop
     # Auto-start on boot and after a crash, so a host reboot brings the teleop

@@ -2,6 +2,14 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)  [![Release](https://img.shields.io/github/v/release/wuji-technology/wuji-hand-teleop)](https://github.com/wuji-technology/wuji-hand-teleop/releases)
 
+> [!NOTE]
+> This is a customized deployment of the official
+> [`wuji-technology/wuji-hand-teleop`](https://github.com/wuji-technology/wuji-hand-teleop)
+> project. The upstream Git history, copyright notices, licenses, and third-party
+> attributions are preserved. Custom integration and safety changes are maintained
+> by [`Zbszbszbssca`](https://github.com/Zbszbszbssca); this notice does not claim
+> ownership of upstream or third-party work.
+
 ROS2 teleoperation for **Wuji Hand**, driven by the **[Wuji Glove](https://pypi.org/project/wuji-sdk/)**. This README is the one-page path from a fresh Ubuntu host to **dual hands moving live**, with **one-click launch through the Monitor GUI**. Hand-pose retargeting is the open-source **[wuji-retargeting](https://github.com/wuji-technology/wuji-retargeting)** algorithm; the ROS2 driver is the open-source **[wujihandros2](https://github.com/wuji-technology/wujihandros2)**.
 
 > **Adding arm teleop?** Get the hand pipeline running first, then follow [`docs/STEAMVR.md`](docs/STEAMVR.md) for the HTC Vive Tracker path or [`docs/PICO.md`](docs/PICO.md) for the PICO 4 VR path. Both extend the same image — no rebuild — and the Tianji-arm controllers under `src/output_devices/tianji_output/` (HTC) and `src/output_devices/tianji_world_output/` (PICO) plug in via the topics documented in [Appendix → Custom Input Device](#custom-input-device).
@@ -125,9 +133,14 @@ cd wuji-hand-teleop
 
 # Pull large files (prebuilt PC-Service .deb, vendored SDK binaries, ~280 MB total)
 git lfs pull
+
+# Ensure Wuji-owned dependencies and their nested assets are present
+git submodule update --init --recursive --progress
 ```
 
-> **Important**: `--recurse-submodules` is required. The repo contains two Wuji-owned submodules — [`wujihandros2`](https://github.com/wuji-technology/wujihandros2) (ROS2 driver; pulls in `external/wuji-description`) and [`wuji-retargeting`](https://github.com/wuji-technology/wuji-retargeting) (hand-pose retargeting algo, pip-installed into the image) — plus the vendored PICO sources under `src/input_devices/pico_input/vendor/`. If you already cloned without it: `git submodule update --init --recursive`.
+> **Important**: `--recurse-submodules` is required. The repo contains two Wuji-owned submodules — [`wujihandros2`](https://github.com/wuji-technology/wujihandros2) (ROS2 driver; pulls in hand description assets) and [`wuji-retargeting`](https://github.com/wuji-technology/wuji-retargeting) (hand-pose retargeting algo, pip-installed into the image) — plus the vendored PICO sources under `src/input_devices/pico_input/vendor/`. If you already cloned without it: `git submodule update --init --recursive --progress`.
+>
+> **Validated dependency pins**: this Docker setup has been validated with the custom `src/wujihandros2` driver based on `v1.0.1` plus the measured-pose startup safety fix, `src/wuji-retargeting` at `v2026.6.27`, and `WUJIHANDCPP_VERSION=1.5.1` in [`docker/Dockerfile`](docker/Dockerfile). Note that `wuji-retargeting v2026.6.27` is newer than `wuji-hand-teleop v2026.6.13`; it is recorded here as the tested build combination for this Dockerfile, not as an upstream submodule pin from that teleop tag. Avoid `git submodule update --remote` unless you also revalidate the Docker and ROS builds.
 
 ### 3. Build the image
 
@@ -139,7 +152,39 @@ docker compose build
 docker compose build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
+If Docker Hub cannot pull `osrf/ros:humble-desktop`, override the base image at build time:
+
+```bash
+docker compose build \
+  --build-arg ROS_BASE_IMAGE=docker.1ms.run/osrf/ros:humble-desktop \
+  --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+Alternatively, pull and tag the proxy image once, then build without pulling again:
+
+```bash
+docker pull docker.1ms.run/osrf/ros:humble-desktop
+docker tag docker.1ms.run/osrf/ros:humble-desktop osrf/ros:humble-desktop
+
+docker compose build --pull=false \
+  --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
 The image only contains the runtime environment (ROS 2 + drivers + Python deps + pre-installed SDKs), not the application code. Your host `src/` is bind-mounted into the container, so code changes don't require an image rebuild.
+
+To verify the dependency versions after cloning:
+
+```bash
+git -C src/wujihandros2 describe --tags --exact-match
+git -C src/wuji-retargeting describe --tags --always
+```
+
+Expected for the currently validated combination:
+
+```text
+v1.0.1-1-g7c3c20c
+v2026.6.27
+```
 
 ### 4. Calibrate Wuji Gloves
 
@@ -630,8 +675,13 @@ If the verifications above do not show the expected values, see [Troubleshooting
 | Hand serial not found | Run `lsusb -v -d 0483:2000 \| grep iSerial` |
 | Robot connection failed | Verify robot is powered on, confirm IP address with `ping`, check network |
 | TF tree incomplete | Ensure `tf_broadcaster` node is running |
-| `ImportError: wuji_retargeting` | The `wuji-retargeting` submodule wasn't initialised before the image was built. On the host: `git submodule update --init --recursive src/wuji-retargeting`, then `docker compose build` (the Dockerfile §6 COPYs the submodule source into the image). |
-| `wujihandcpp not found` | Install C++ SDK: `wget https://github.com/wuji-technology/wujihandpy/releases/download/v1.5.1/wujihandcpp-1.5.1-amd64.deb && sudo apt install ./wujihandcpp-1.5.1-amd64.deb` |
+| Docker build fails at `FROM osrf/ros:humble-desktop` with Docker Hub connection errors | Build with `--build-arg ROS_BASE_IMAGE=docker.1ms.run/osrf/ros:humble-desktop`, or pull/tag that proxy image as `osrf/ros:humble-desktop` and rebuild with `--pull=false`. |
+| `COPY src/wuji-retargeting` fails during Docker build | The `wuji-retargeting` submodule wasn't initialised before the image was built. On the host: `git submodule update --init --recursive --progress src/wuji-retargeting`, then `docker compose build`. |
+| `COPY .../wuji-description.../urdf` fails during Docker build | Ensure `src/wujihandros2` and nested assets are present: `git submodule update --init --recursive --progress src/wujihandros2`. The Dockerfile supports both `external/wuji-description/hand/body/urdf` and `external/wuji-hand-description/urdf`. |
+| `ImportError: wuji_retargeting` | Rebuild the image after initialising `src/wuji-retargeting`; the Dockerfile pip-installs that submodule at image build time. |
+| `wujihandcpp not found` | The C++ SDK is installed by `ARG WUJIHANDCPP_VERSION=1.5.1` in [`docker/Dockerfile`](docker/Dockerfile). For bare-metal experiments, install the matching release deb: `wget https://github.com/wuji-technology/wujihandpy/releases/download/v1.5.1/wujihandcpp-1.5.1-amd64.deb && sudo apt install ./wujihandcpp-1.5.1-amd64.deb`. |
+| `wujihandcpp/transport/usb_enumerate.hpp` not found | `src/wujihandros2` is too new for `wujihandcpp 1.5.1`; use the validated `wujihandros2 v1.0.1`, or upgrade `wujihandcpp` and revalidate the full Docker + colcon build. |
+| `Hand::Side does not name a type` | Same root cause: `wujihandros2` and `wujihandcpp` API versions do not match. |
 | Package not found | Run `colcon build` then `source install/setup.bash` |
 | Any SteamVR / HTC Vive Tracker problem (tracker not recognized, flickering, "No HMD", null-driver inactive) | See [docs/STEAMVR.md §8 FAQ](docs/STEAMVR.md#8-faq) |
 | Any PICO problem (initialization timeout, H.264 no image, ADB forward, `TCP connect failed`) | See [docs/PICO.md §7 FAQ](docs/PICO.md#7-faq) |

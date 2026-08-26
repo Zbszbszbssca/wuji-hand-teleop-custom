@@ -52,8 +52,9 @@ if [ ! -f "$WS/install/setup.bash" ]; then
     echo "[INFO] First startup, building ROS2 workspace..."
     echo ""
 
-    # wuji-description URDF conflict: wujihandros2 provides wuji_description as a ROS2 package;
-    # wuji-retargeting bundles its own copy via pip. Mark legacy/duplicate paths to skip colcon build.
+    # Wuji description URDF conflict: wujihandros2 may provide wuji-description
+    # or wuji-hand-description depending on tag, while wuji-retargeting also
+    # carries description assets. Mark legacy/duplicate paths to skip colcon build.
     find "$WS/src" -path "*/mujoco-sim/wuji_hand_description" -exec touch {}/COLCON_IGNORE \; 2>/dev/null || true
     find "$WS/src" -path "*/wuji_retargeting/wuji-description" -exec touch {}/COLCON_IGNORE \; 2>/dev/null || true
 

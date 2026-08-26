@@ -1,7 +1,9 @@
 """Wuji-hand controller node (one process per hand, multi-core parallelism).
 
 input_source is selected by wujihand_ik.yaml: 'wuji_glove' (UDP, in-process)
-or 'manus' (subscribes /manus_glove_*); publishes /{side}_hand/joint_commands.
+or 'manus' (subscribes /manus_glove_*). It publishes the raw retarget output
+on /{side}_hand/retargeted_joint_commands, while the existing hardware path
+continues to publish /{side}_hand/joint_commands after its startup handoff.
 """
 from __future__ import annotations
 
@@ -14,7 +16,9 @@ from typing import Optional
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.utilities import remove_ros_args
+from sensor_msgs.msg import JointState
 
 from wujihand_output import WujiHandController
 from .common import (
@@ -119,6 +123,15 @@ class WujiHandControllerNode(Node):
         self._last_recv_time: float = 0.0
         self._reconnect_log_counter: int = 0
 
+        # Simulation/monitoring side channel. It carries the validated 20-DoF
+        # IK target before the physical-hand startup handoff and therefore does
+        # not require /{hand_name}/joint_states to exist.
+        self._retargeted_cmd_pub = self.create_publisher(
+            JointState,
+            f"/{hand_name}/retargeted_joint_commands",
+            qos_profile_sensor_data,
+        )
+
         # Controller (drives retargeter + wujihand driver)
         self.get_logger().info(
             f"Initializing {side}-hand controller (input_source={self._input_source})..."
@@ -130,6 +143,7 @@ class WujiHandControllerNode(Node):
             node=self,
             logger=self._logger_adapter,
             retarget_config_dir=retarget_config_dir,
+            retargeted_positions_callback=self._publish_retargeted_positions,
         )
         self.get_logger().info("Controller initialized")
 
@@ -156,8 +170,17 @@ class WujiHandControllerNode(Node):
 
         self.get_logger().info(
             f"Ready: side={side}, source={self._input_source}, "
-            f"rate={self._control_rate_hz:.1f}Hz -> /{hand_name}/joint_commands"
+            f"rate={self._control_rate_hz:.1f}Hz -> "
+            f"/{hand_name}/retargeted_joint_commands (raw IK), "
+            f"/{hand_name}/joint_commands (hardware handoff)"
         )
+
+    def _publish_retargeted_positions(self, positions: np.ndarray) -> None:
+        """Publish one validated raw IK target without hardware dependencies."""
+        msg = JointState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.position = np.asarray(positions, dtype=np.float32).tolist()
+        self._retargeted_cmd_pub.publish(msg)
 
     # ==================== input_source=wuji_glove ====================
 

@@ -1,4 +1,6 @@
-
 [submodule "src/wujihandros2"]
 	path = src/wujihandros2
-	url = https://github.com/wuji-technology/wujihandros2.git
+	url = git@github.com:Zbszbszbssca/wujihandros2-custom.git
+[submodule "src/wuji-retargeting"]
+	path = src/wuji-retargeting
+	url = https://github.com/wuji-technology/wuji-retargeting.git

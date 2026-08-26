@@ -10,8 +10,9 @@ Multi-core parallelism: one process per hand -> independent retargeter,
 independent GIL -> good multi-core CPU utilization.
 """
 import logging
+import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 import numpy as np
 
 try:
@@ -39,6 +40,7 @@ class WujiHandController:
     """
 
     NUM_JOINTS = 20  # 5 fingers x 4 joints
+    STARTUP_HANDOFF_DURATION_SEC = 2.0
 
     def __init__(
         self,
@@ -50,6 +52,7 @@ class WujiHandController:
         enable_ik: bool = True,
         logger=None,
         node=None,
+        retargeted_positions_callback: Optional[Callable[[np.ndarray], None]] = None,
     ):
         """
         Initialize a single-hand controller.
@@ -69,6 +72,9 @@ class WujiHandController:
             enable_ik: enable IK control.
             logger: external logger.
             node: ROS2 node instance.
+            retargeted_positions_callback: optional observer called with each
+                valid 20-DoF IK target before the hardware startup handoff.
+                This does not alter the command sent to the physical hand.
         """
         if logger is not None:
             self.logger = logger
@@ -84,9 +90,19 @@ class WujiHandController:
         self.hand_name = hand_name
         self.input_source = input_source
         self.node = node
+        self._retargeted_positions_callback = retargeted_positions_callback
         self._retarget_config_dir = (
             Path(retarget_config_dir) if retarget_config_dir else None
         )
+
+        # Wuji Glove startup handoff.  The start pose is captured from the
+        # first valid wujihandros2 joint-state feedback; throughout the fixed
+        # handoff window the endpoint remains the latest glove target.  MANUS
+        # keeps its existing direct-control behaviour.
+        self._handoff_enabled = input_source == "wuji_glove"
+        self._handoff_start_positions: Optional[np.ndarray] = None
+        self._handoff_started_at: Optional[float] = None
+        self._handoff_complete = not self._handoff_enabled
 
         # Hardware interface
         self.hand: Optional[WujiHand] = None
@@ -192,10 +208,68 @@ class WujiHandController:
             (success, joint_angles).
         """
         angles = self.retarget(keypoints)
-        if angles is not None and self.hand is not None:
-            success = self.hand.set_joint_positions(angles)
-            return success, angles
-        return False, angles
+        if angles is None:
+            return False, angles
+
+        target = np.asarray(angles, dtype=np.float32)
+        if target.shape != (self.NUM_JOINTS,) or not np.all(np.isfinite(target)):
+            self.logger.error(
+                f"Invalid retarget output for {self.side} hand: shape={target.shape}"
+            )
+            return False, angles
+
+        # Publish/observe the raw retarget result before the hardware handoff.
+        # A consumer such as a simulator must not depend on physical-hand
+        # joint-state feedback being available. Keep observer failures isolated
+        # so this optional path cannot interrupt the existing hardware command.
+        if self._retargeted_positions_callback is not None:
+            try:
+                self._retargeted_positions_callback(target.copy())
+            except Exception as e:
+                self.logger.error(f"Failed to publish {self.side}-hand retarget output: {e}")
+
+        if self.hand is None:
+            return False, target
+
+        if not self._handoff_complete:
+            if self._handoff_start_positions is None:
+                current = self.hand.get_joint_positions()
+                if current is None:
+                    # Do not command an unknown start pose.  The control loop
+                    # will retry with the newest glove target after feedback
+                    # arrives from wujihandros2.
+                    return False, target
+                current = np.asarray(current, dtype=np.float32)
+                if (current.shape != (self.NUM_JOINTS,)
+                        or not np.all(np.isfinite(current))):
+                    return False, target
+                self._handoff_start_positions = current.copy()
+                self._handoff_started_at = time.monotonic()
+                self.logger.info(
+                    f"{self.side}-hand startup handoff started "
+                    f"({self.STARTUP_HANDOFF_DURATION_SEC:.1f}s)"
+                )
+
+            elapsed = time.monotonic() - self._handoff_started_at
+            t = min(elapsed / self.STARTUP_HANDOFF_DURATION_SEC, 1.0)
+            # Quintic smoothstep: zero velocity and acceleration at both ends.
+            blend = 10.0 * t**3 - 15.0 * t**4 + 6.0 * t**5
+            command = (
+                self._handoff_start_positions * (1.0 - blend)
+                + target * blend
+            )
+            success = self.hand.set_joint_positions(command)
+            if t >= 1.0 and success:
+                self._handoff_complete = True
+                self._handoff_start_positions = None
+                self._handoff_started_at = None
+                self.logger.info(
+                    f"{self.side}-hand startup handoff complete; live tracking enabled"
+                )
+            return success, command
+
+        success = self.hand.set_joint_positions(target)
+        return success, target
 
     # ==================== Status & release ====================
 
